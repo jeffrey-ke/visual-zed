@@ -3,6 +3,10 @@ ZED Mini Camera Wrapper with Fault Tolerance
 Implements resilient capture operations for ZED camera systems.
 """
 
+import re
+import pdb
+import subprocess
+import shlex
 import time
 import random
 import threading
@@ -422,75 +426,103 @@ class ZedWrapper:
             True if USB 3.0 detected or check cannot be performed
             False if USB 2.0 detected (will likely cause LOW USB BANDWIDTH error)
         """
-        import subprocess
-        import re
         
-        try:
-            # Get ZED camera serial from SDK
-            info = self.camera.get_camera_information()
-            serial = str(info.serial_number)
-            
-            # Find ZED device in USB tree using lsusb
-            # ZED cameras use vendor ID 2b03 (Stereolabs)
-            result = subprocess.run(
-                ['lsusb', '-d', '2b03:'],
-                capture_output=True,
-                text=True,
-                timeout=5
+        # Get ZED camera serial from SDK
+        info = self.camera.get_camera_information()
+        serial = str(info.serial_number)
+        
+        # Find ZED device in USB tree using lsusb
+        # ZED cameras use vendor ID 2b03 (Stereolabs)
+        def _pipe(*cmds, input=None, to=1):
+            for cmd in cmds:
+                res = subprocess.run(
+                            shlex.split(cmd),
+                            input=input,
+                            timeout=to,
+                            capture_output=True,
+                            text=True
+                        )
+                assert res.returncode == 0, f"Failed on {cmd}!"
+                input = res.stdout
+            return res
+
+        zed_device_found = _pipe(
+            'usb-devices',
+            'grep -i -E "zed-m$" -C 4',
+            'grep T:',
+            to=5
+        )
+        if zed_device_found.returncode != 0 or not zed_device_found.stdout.strip():
+            logger.warning("Could not find ZED camera in USB device list")
+            return False  # Can't check, proceed anyway
+        
+        bus_match = re.search(r'Bus=(\d+)', zed_device_found.stdout)
+        port_match = re.search(r'Port=(\d+)', zed_device_found.stdout)
+        speed_match = re.search(r'Spd=(\d+)', zed_device_found.stdout)
+
+        if not (bus_match and port_match and speed_match):
+            logger.warning("Could not parse USB bus/device info")
+            return False
+        
+        bus = int(bus_match.group(1))
+        port = int(port_match.group(1))
+        speed = int(speed_match.group(1))
+
+        logger.info(f"Bus {bus} and port {port} and speed {speed}")
+        pdb.set_trace()
+        if speed != 5000:
+            logger.warn(f"speed {speed} for device at bus {bus} and port {port} is not 5000")
+            return False
+
+        # checking that there's enough bandwidth under the host
+        lsusb = _pipe(
+            'lsusb',
+            f'grep -E "Bus {bus:03}"'
+        )
+        host_bandwidth = int(
+                _pipe(
+                    f"cat /sys/bus/usb/devices/usb{bus}/speed"
+                )
+                .stdout
+                .split("\n")[0]
+        )
+        logger.info(f"Host speed = {host_bandwidth}")
+        def is_device(line):
+            device_num = int(
+                    re.search(r'Device (\d+)', line).group(1)
             )
-            
-            if result.returncode != 0 or not result.stdout.strip():
-                logger.warning("Could not find ZED camera in USB device list")
-                return True  # Can't check, proceed anyway
-            
-            # Parse bus and device number from lsusb output
-            # Format: "Bus 001 Device 002: ID 2b03:f582 ..."
-            match = re.search(r'Bus (\d+) Device (\d+)', result.stdout)
-            if not match:
-                logger.warning("Could not parse USB bus/device info")
-                return True
-            
-            bus = match.group(1)
-            
-            # Check USB speed from sysfs
-            # Path: /sys/bus/usb/devices/X-Y/speed where X is bus number
-            # We need to find the device path - search for ZED's vendor
-            speed_paths = list(__import__('pathlib').Path('/sys/bus/usb/devices').glob('*/speed'))
-            
-            for speed_path in speed_paths:
-                device_path = speed_path.parent
-                vendor_path = device_path / 'idVendor'
-                
-                if vendor_path.exists():
-                    vendor = vendor_path.read_text().strip()
-                    if vendor == '2b03':  # Stereolabs vendor ID
-                        speed = speed_path.read_text().strip()
-                        speed_mbps = int(speed)
-                        
-                        logger.info(f"ZED camera USB speed: {speed_mbps} Mbps")
-                        
-                        if speed_mbps < 5000:  # Less than USB 3.0
-                            logger.error(
-                                f"ZED camera connected at USB 2.0 speed ({speed_mbps} Mbps). "
-                                f"USB 3.0 (5000 Mbps) required for reliable operation. "
-                                f"Connect to a USB 3.0 port (blue connector)."
-                            )
-                            return False
-                        
-                        return True
-            
-            logger.warning("Could not determine ZED USB speed from sysfs")
-            return True  # Can't verify, proceed anyway
-            
-        except subprocess.TimeoutExpired:
-            logger.warning("USB check timed out")
+            return device_num > 1
+
+        devices = [line for line in lsusb.stdout.split("\n")[:-1] if is_device(line)]
+        def get_speed(line):
+            _id = re.search(r'ID ([0-9a-zA-Z]+):([0-9a-zA-Z]+)', line)
+            assert _id, f"regex failed on {line}!"
+            vendor, deviceid = _id.group(1), _id.group(2)
+            result = _pipe(
+                f'lsusb -v -d {vendor}:{deviceid}',
+                'grep bcdUSB'
+            )
+            usbprotocol = float(re.search(r'\d+\.\d+', result.stdout).group(0))
+            if usbprotocol < 3:
+                return 480
+            elif usbprotocol == 3.00:
+                return 5000
+            elif usbprotocol == 3.10:
+                return 10000
+            elif usbprotocol == 3.20:
+                return 20000
+            else:
+                raise RuntimeError(f"Usb protocol unknown {usbprotocol}")
+
+        speeds = [get_speed(d) for d in devices]
+        total_speed = sum(speeds)
+        logger.info(f"Total bandwidth allocated = {total_speed}")
+        if total_speed > host_bandwidth:
+            logger.warn(f"{len(devices)} devices are taking {total_speed} Mbps with host bandwidth of only {host_bandwidth}")
+            return False
+        else:
+            logger.info("Checked! All passed.")
             return True
-        except FileNotFoundError:
-            logger.warning("lsusb not available, skipping USB speed check")
-            return True
-        except Exception as e:
-            logger.warning(f"USB bandwidth check failed: {e}")
-            return True  # Don't block on check failure
 
     def _test_single_grab(self) -> bool:
         """Test that we can grab a single frame."""
