@@ -16,7 +16,11 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Callable, Any, Tuple
 from contextlib import contextmanager
 from copy import deepcopy
+
+import numpy as np
 import pyzed.sl as sl
+
+from datastructs import Intrinsics
 
 logger = logging.getLogger(__name__)
 
@@ -807,7 +811,7 @@ class ZedWrapper:
     # Utility Methods
     # ------------------------------------------------------------------------
 
-    def get_intrinsics(self) -> Dict[str, float]:
+    def get_intrinsics(self) -> Intrinsics:
         """Get camera intrinsic parameters."""
         if self.state != CameraState.READY:
             raise ValueError(f"Cannot get intrinsics in state {self.state}")
@@ -815,12 +819,18 @@ class ZedWrapper:
         info = self.camera.get_camera_information()
         calib = info.camera_configuration.calibration_parameters.left_cam
 
-        return {
-            'fx': calib.fx,
-            'fy': calib.fy,
-            'cx': calib.cx,
-            'cy': calib.cy,
-        }
+        return Intrinsics(
+            calib.fx,
+            calib.fy,
+            calib.cx,
+            calib.cy,
+        )
+
+    def get_K(self) -> np.ndarray:
+        intr = self.get_intrinsics()
+        K = np.diag([intr.fx, intr.fy, 1])
+        K[:2, -1] = [intr.cx, intr.cy]
+        return K
 
 
 # ============================================================================
