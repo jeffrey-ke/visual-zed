@@ -98,10 +98,10 @@ def demo_single_capture(output_dir: Path, config: dict = None):
             # Get camera info
             intrinsics = zed.get_intrinsics()
             print(f"\nCamera intrinsics:")
-            print(f"  fx: {intrinsics['fx']:.2f}")
-            print(f"  fy: {intrinsics['fy']:.2f}")
-            print(f"  cx: {intrinsics['cx']:.2f}")
-            print(f"  cy: {intrinsics['cy']:.2f}")
+            print(f"  fx: {intrinsics.fx:.2f}")
+            print(f"  fy: {intrinsics.fy:.2f}")
+            print(f"  cx: {intrinsics.cx:.2f}")
+            print(f"  cy: {intrinsics.cy:.2f}")
             
             # Capture single image
             print("\nCapturing image...")

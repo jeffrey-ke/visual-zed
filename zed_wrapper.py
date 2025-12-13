@@ -18,9 +18,10 @@ from contextlib import contextmanager
 from copy import deepcopy
 
 import numpy as np
+import torch
 import pyzed.sl as sl
 
-from datastructs import Intrinsics
+from datastructs import Intrinsics, CaptureResult
 
 logger = logging.getLogger(__name__)
 
@@ -103,19 +104,6 @@ def classify_error(error_code: sl.ERROR_CODE) -> ErrorSeverity:
 # ============================================================================
 # SECTION 2: Sequence Management and State Tracking
 # ============================================================================
-
-@dataclass
-class CaptureResult:
-    """Result of a single capture operation."""
-    position_index: int
-    timestamp: float
-    image_left: Optional[Any] = None
-    image_right: Optional[Any] = None
-    depth_image: Optional[Any] = None
-    depth_map: Optional[Any] = None
-    success: bool = True
-    error_message: Optional[str] = None
-
 
 @dataclass
 class CaptureSequence:
