@@ -1,0 +1,3 @@
+alias capt='docker run -it --runtime nvidia --privileged -v /usr/local/zed/resources:/usr/local/zed/resources -v /usr/local/zed/settings:/usr/local/zed/settings -v $PWD:$PWD -e DISPLAY -e PYTHONPATH=$PWD -v /tmp/.X11-unix:/tmp/.X11-unix zed:v0 python3 -m pdb $PWD/zed/demo_capture.py -o $PWD/zed/captures'
+alias run='docker run -it --runtime nvidia --privileged -v /usr/local/zed/settings:/usr/local/zed/settings -v $PWD:$PWD -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix zed:v0'
+alias zedex='xhost +si:localuser:root && docker run --runtime nvidia --privileged -v /usr/local/zed/settings:/usr/local/zed/settings -v $PWD:$PWD -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix zed:v0 /usr/local/zed/tools/ZED_Explorer'
