@@ -461,7 +461,6 @@ class ZedWrapper:
         speed = int(speed_match.group(1))
 
         logger.info(f"Bus {bus} and port {port} and speed {speed}")
-        pdb.set_trace()
         if speed != 5000:
             logger.warn(f"speed {speed} for device at bus {bus} and port {port} is not 5000")
             return False
