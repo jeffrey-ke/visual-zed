@@ -22,6 +22,7 @@ import torch
 import pyzed.sl as sl
 
 from datastructs import Intrinsics, CaptureResult, CaptureSequence
+from procutils import _pipe
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +259,7 @@ class ZedWrapper:
 
     def __enter__(self):
         """Context manager entry - opens camera."""
+        self.validate_hardware()
         self.open_camera()
         return self
 
@@ -347,7 +349,14 @@ class ZedWrapper:
     # Pre-Flight Validation
     # ------------------------------------------------------------------------
 
-    def validate_camera_ready(self):
+    def validate_hardware(self):
+        logger.info("Checking hardware: ")
+        if not self._check_usb_bandwidth():
+            logger.info("USB hardware check failed.")
+            raise CameraError("validate_hardware failed")
+        
+
+    def validate_camera_functional(self):
         """
         Comprehensive check before starting capture sequence.
         Fail-fast: detect problems early before proceeding with captures.
@@ -360,7 +369,6 @@ class ZedWrapper:
 
         checks = [
             ("Camera is opened", lambda: self.camera.is_opened()),
-            ("USB bandwidth sufficient", self._check_usb_bandwidth),
             ("Can grab test frame", self._test_single_grab),
             ("Can retrieve left image", self._test_retrieve_image),
             ("Can get camera intrinsics", self._test_get_intrinsics),
@@ -397,19 +405,6 @@ class ZedWrapper:
         
         # Find ZED device in USB tree using lsusb
         # ZED cameras use vendor ID 2b03 (Stereolabs)
-        def _pipe(*cmds, input=None, to=1):
-            for cmd in cmds:
-                res = subprocess.run(
-                            shlex.split(cmd),
-                            input=input,
-                            timeout=to,
-                            capture_output=True,
-                            text=True
-                        )
-                assert res.returncode == 0, f"Failed on {cmd}!"
-                input = res.stdout
-            return res
-
         zed_device_found = _pipe(
             'usb-devices',
             'grep -i -E "zed-m$" -C 4',
@@ -812,7 +807,7 @@ def example_usage():
     try:
         with ZedWrapper(config=config) as zed:
             # Pre-flight validation
-            zed.validate_camera_ready()
+            zed.validate_camera_functional()
 
             # Capture a single image
             result = zed.capture_image()

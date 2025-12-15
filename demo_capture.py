@@ -92,7 +92,7 @@ def demo_single_capture(output_dir: Path, config: dict = None):
         with ZedWrapper(config=config) as zed:
             # Run pre-flight checks
             print("\nRunning pre-flight validation...")
-            zed.validate_camera_ready()
+            zed.validate_camera_functional()
             print("✓ Camera validated and ready")
             
             # Get camera info
@@ -139,7 +139,7 @@ def demo_sequence_capture(output_dir: Path, num_captures: int = 5, delay: float 
         with ZedWrapper(config=config) as zed:
             # Run pre-flight checks
             print("\nRunning pre-flight validation...")
-            zed.validate_camera_ready()
+            zed.validate_camera_functional()
             print("✓ Camera validated and ready")
             
             # Capture sequence
