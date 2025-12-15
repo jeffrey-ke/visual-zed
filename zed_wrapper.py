@@ -21,7 +21,7 @@ import numpy as np
 import torch
 import pyzed.sl as sl
 
-from datastructs import Intrinsics, CaptureResult
+from datastructs import Intrinsics, CaptureResult, CaptureSequence
 
 logger = logging.getLogger(__name__)
 
@@ -104,34 +104,6 @@ def classify_error(error_code: sl.ERROR_CODE) -> ErrorSeverity:
 # ============================================================================
 # SECTION 2: Sequence Management and State Tracking
 # ============================================================================
-
-@dataclass
-class CaptureSequence:
-    """
-    Tracks state of multi-capture sequence.
-    Enables resume-on-failure without losing progress.
-    """
-    num_captures: int
-    completed_captures: Dict[int, CaptureResult] = field(default_factory=dict)
-    failed_captures: List[int] = field(default_factory=list)
-    current_index: int = 0
-    max_retries_per_capture: int = 3
-
-    def is_complete(self) -> bool:
-        """Check if sequence is complete."""
-        return self.current_index >= self.num_captures
-
-    def get_progress(self) -> Tuple[int, int]:
-        """Return (completed, total) count."""
-        return len(self.completed_captures), self.num_captures
-
-    def mark_capture_complete(self, index: int, result: CaptureResult):
-        """Mark a capture as successfully completed."""
-        self.completed_captures[index] = result
-
-    def mark_capture_failed(self, index: int):
-        """Mark a capture as failed after max retries."""
-        self.failed_captures.append(index)
 
 
 # ============================================================================
