@@ -399,9 +399,6 @@ class ZedWrapper:
             False if USB 2.0 detected (will likely cause LOW USB BANDWIDTH error)
         """
         
-        # Get ZED camera serial from SDK
-        info = self.camera.get_camera_information()
-        serial = str(info.serial_number)
         
         # Find ZED device in USB tree using lsusb
         # ZED cameras use vendor ID 2b03 (Stereolabs)
