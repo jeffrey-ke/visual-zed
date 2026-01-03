@@ -37,10 +37,9 @@ class VideoZed(zed_wrapper.ZedWrapper):
             i, frame = next(self.frame_it)
 
         height, width, _ = frame.shape
-        pdb.set_trace() # is height 1080 now?
         left, right = (
-                make_rgba(cv2.resize(frame[:, :width//2, :], (1920, 1080), interpolation=cv2.INTER_AREA)),
-                make_rgba(cv2.resize(frame[:, width//2:, :], (1920, 1080), interpolation=cv2.INTER_AREA))
+                cv2.resize(frame[:, :width//2, :], (1920, 1080), interpolation=cv2.INTER_AREA),
+                cv2.resize(frame[:, width//2:, :], (1920, 1080), interpolation=cv2.INTER_AREA)
         )
 
         depth = np.empty((1080, 1920), dtype=np.float32)
@@ -68,8 +67,8 @@ class DatasetZed(zed_wrapper.ZedWrapper):
 
     def capture_image(self) -> CaptureResult:
         selected = np.random.choice(self.dataset.samples)
-        left_img = make_rgba(cv2.imread(selected['img_left_path']))
-        right_img = make_rgba(cv2.imread(selected['img_right_path']))
+        left_img = cv2.cvtColor(cv2.imread(selected['img_left_path']), cv2.COLOR_BGR2RGB)
+        right_img = cv2.cvtColor(cv2.imread(selected['img_right_path']), cv2.COLOR_BGR2RGB)
         depth = np.load(selected['depth_left_path'])
         depth_rescaled = (
                 (
