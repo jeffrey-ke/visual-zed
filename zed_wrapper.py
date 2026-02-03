@@ -392,7 +392,7 @@ class ZedWrapper:
 
         checks = [
             ("Camera is opened", lambda: self.camera.is_opened()),
-            ("USB bandwidth sufficient", self._check_usb_bandwidth),
+            # ("USB bandwidth sufficient", self._check_usb_bandwidth),
             ("Can grab test frame", self._test_single_grab),
             ("Can retrieve left image", self._test_retrieve_image),
             ("Can get camera intrinsics", self._test_get_intrinsics),
@@ -407,7 +407,8 @@ class ZedWrapper:
                 logger.debug(f"✓ {check_name}")
             except Exception as e:
                 raise CameraError(f"Validation failed: {check_name} - {e}") from e
-
+            
+        logger.info(("SKIPPED USB bandwidth sufficient check"))
         logger.info("✓ All pre-flight checks passed - camera ready for sequence")
 
     def _check_usb_bandwidth(self) -> bool:

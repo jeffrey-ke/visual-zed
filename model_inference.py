@@ -16,6 +16,42 @@ from datastructs import StereoSample
 logger = logging.getLogger(__name__)
 
 
+def transform_grasp_to_camera(offset: np.ndarray, baseline: float = 0.063) -> np.ndarray:
+    """
+    Transform offset from grasp frame to left camera frame.
+    
+    The grasp frame and camera frame have different orientations:
+    - Grasp frame: X=forward, Y=right, Z=down
+    - Camera frame: X=right, Y=down, Z=forward
+    
+    This applies rotation and translation to convert between frames.
+    
+    Args:
+        offset: 3D offset in grasp frame [x, y, z] in meters
+        baseline: Stereo baseline distance in meters (default: 0.063m for ZED)
+        
+    Returns:
+        3D offset in camera frame [x, y, z] in meters
+    """
+    # Rotation matrix from grasp to camera frame
+    # Maps: grasp_X -> -cam_Z, grasp_Y -> cam_X, grasp_Z -> -cam_Y
+    rotn = np.array([
+        [0,  1,  0],
+        [0,  0, -1],
+        [-1, 0,  0],
+    ], dtype=np.float32)
+    
+    # Apply rotation to the offset vector
+    offset = - offset
+    offset_rotated = rotn @ offset
+    
+    # Apply translation offset (half baseline in negative X direction in camera frame)
+    translation = np.array([baseline/2, 0., 0.], dtype=np.float32)
+    offset_camera = offset_rotated + translation
+    
+    return offset_camera
+
+
 class VisualServoingPredictor:
     """Wrapper for loading and running visual servoing model predictions."""
     
@@ -26,7 +62,8 @@ class VisualServoingPredictor:
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         input_size: Tuple[int, int] = (224, 224),  # (H, W) - must match training!
         normalize_mean: Tuple[float, float, float] = (0.485, 0.456, 0.406),  # ImageNet defaults
-        normalize_std: Tuple[float, float, float] = (0.229, 0.224, 0.225)    # ImageNet defaults
+        normalize_std: Tuple[float, float, float] = (0.229, 0.224, 0.225),   # ImageNet defaults
+        baseline: float = 0.063  # Stereo baseline in meters
     ):
         """
         Initialize the predictor.
@@ -38,11 +75,13 @@ class VisualServoingPredictor:
             input_size: Expected input size (H, W) for the model
             normalize_mean: Mean values for normalization (should match training)
             normalize_std: Std values for normalization (should match training)
+            baseline: Stereo baseline distance in meters
         """
         self.device = torch.device(device)
         self.input_size = input_size
         self.normalize_mean = torch.tensor(normalize_mean).view(3, 1, 1)
         self.normalize_std = torch.tensor(normalize_std).view(3, 1, 1)
+        self.baseline = baseline
         
         # Load model
         logger.info(f"Loading model from {checkpoint_path}")
@@ -51,6 +90,7 @@ class VisualServoingPredictor:
         
         logger.info(f"Model loaded successfully on {self.device}")
         logger.info(f"Using normalization - mean: {normalize_mean}, std: {normalize_std}")
+        logger.info(f"Stereo baseline: {baseline}m")
         
     def _load_model(self, checkpoint_path: str, model_class) -> torch.nn.Module:
         """Load model from checkpoint."""
@@ -148,15 +188,16 @@ class VisualServoingPredictor:
         return sample
     
     @torch.no_grad()
-    def predict(self, stereo_sample: StereoSample) -> np.ndarray:
+    def predict(self, stereo_sample: StereoSample, apply_transform: bool = True) -> np.ndarray:
         """
         Run model prediction.
         
         Args:
             stereo_sample: Preprocessed stereo sample
+            apply_transform: Whether to apply grasp-to-camera transformation (default: True)
             
         Returns:
-            Predicted offset as numpy array of shape (3,) with [x, y, z]
+            Predicted offset as numpy array of shape (3,) with [x, y, z] in camera frame
         """
         # Run inference
         output = self.model(stereo_sample)
@@ -171,9 +212,16 @@ class VisualServoingPredictor:
         
         # Convert to numpy and remove batch dimension
         # Output shape is (1, 3), we want (3,)
-        offset = prediction.squeeze(0).cpu().numpy()
+        offset_grasp = prediction.squeeze(0).cpu().numpy()
         
-        return offset
+        # Apply coordinate transformation from grasp frame to camera frame
+        if apply_transform:
+            offset_camera = transform_grasp_to_camera(offset_grasp, baseline=self.baseline)
+            logger.debug(f"Grasp frame offset: {offset_grasp}")
+            logger.debug(f"Camera frame offset: {offset_camera}")
+            return offset_camera
+        else:
+            return offset_grasp
     
     def predict_from_numpy(
         self, 
@@ -181,7 +229,8 @@ class VisualServoingPredictor:
         right_img: np.ndarray,
         left_depth: Optional[np.ndarray] = None,
         save_output: Optional[str] = None,
-        display_scale: float = 100.0
+        display_scale: float = 100.0,
+        apply_transform: bool = True
     ) -> np.ndarray:
         """
         Convenience method for prediction from numpy arrays.
@@ -192,12 +241,13 @@ class VisualServoingPredictor:
             left_depth: Optional left depth map (H, W)
             save_output: Optional path to save visualization (e.g., 'result.jpg')
             display_scale: Scale factor for visualization arrows
+            apply_transform: Whether to apply grasp-to-camera transformation
             
         Returns:
-            Predicted offset as numpy array of shape (3,) with [x, y, z]
+            Predicted offset as numpy array of shape (3,) with [x, y, z] in camera frame
         """
         stereo_sample = self.preprocess_images(left_img, right_img, left_depth)
-        offset = self.predict(stereo_sample)
+        offset = self.predict(stereo_sample, apply_transform=apply_transform)
         
         # Save visualization if requested
         if save_output is not None:
@@ -217,7 +267,8 @@ class VisualServoingPredictor:
         stereo_pairs: list,
         output_dir: str,
         display_scale: float = 100.0,
-        prefix: str = "inference"
+        prefix: str = "inference",
+        apply_transform: bool = True
     ) -> list:
         """
         Run predictions on a batch of stereo pairs and save visualizations.
@@ -227,9 +278,10 @@ class VisualServoingPredictor:
             output_dir: Directory to save visualization images
             display_scale: Scale factor for visualization arrows
             prefix: Prefix for output filenames
+            apply_transform: Whether to apply grasp-to-camera transformation
             
         Returns:
-            List of predicted offsets
+            List of predicted offsets (in camera frame if apply_transform=True)
         """
         from datetime import datetime
         output_path = Path(output_dir)
@@ -244,7 +296,10 @@ class VisualServoingPredictor:
                 left_img, right_img, left_depth = pair
             
             # Run prediction
-            offset = self.predict_from_numpy(left_img, right_img, left_depth)
+            offset = self.predict_from_numpy(
+                left_img, right_img, left_depth, 
+                apply_transform=apply_transform
+            )
             offsets.append(offset)
             
             # Create visualization
@@ -266,26 +321,36 @@ class VisualServoingPredictor:
         return offsets
 
 
-def create_camera_matrix(image_width: int, image_height: int, focal_length_mm: float = 2.8) -> np.ndarray:
+def create_camera_matrix(
+    image_width: int = 1920, 
+    image_height: int = 1080, 
+    focal_length_mm: float = 2.8,
+    sensor_width_mm: float = 4.8  # Typical 1/3" sensor width
+) -> np.ndarray:
     """
-    Create camera intrinsic matrix with hardcoded focal length.
+    Create camera intrinsic matrix for ZED camera.
     
-    Camera parameters:
-        - Focal length: 2.8mm (hardcoded)
+    ZED Camera parameters:
+        - Focal length: 2.8mm
+        - Resolution: 1920x1080 (default)
+        - Sensor size: ~1/3" (4.8mm x 2.7mm typical)
         - Principal point: Image center (cx = width/2, cy = height/2)
     
     Args:
-        image_width: Image width in pixels
-        image_height: Image height in pixels  
+        image_width: Image width in pixels (default: 1920)
+        image_height: Image height in pixels (default: 1080)
         focal_length_mm: Focal length in millimeters (default: 2.8mm)
+        sensor_width_mm: Sensor width in millimeters (default: 4.8mm)
         
     Returns:
         3x3 camera intrinsic matrix K
     """
-    # For a camera with 2.8mm focal length, we need to convert to pixels
-    # Assuming typical sensor size, fx and fy in pixels ≈ focal_length_mm * image_width
-    # For ZED-like cameras with 2.8mm lens, typical fx ≈ 700 pixels for 1920x1080
-    fx = fy = focal_length_mm * image_width / (2.8 * 1920 / 700)  # Scale appropriately
+    # Convert focal length from mm to pixels
+    # fx = f_mm * (image_width / sensor_width_mm)
+    fx = focal_length_mm * (image_width / sensor_width_mm)
+    
+    # Assume square pixels (same for fy)
+    fy = fx
     
     # Principal point at image center
     cx = image_width / 2.0
@@ -310,7 +375,7 @@ def project_3d_to_2d(point_3d: np.ndarray, camera_matrix: np.ndarray) -> Tuple[i
         Z: forward (depth)
     
     Args:
-        point_3d: 3D point [x, y, z] in meters
+        point_3d: 3D point [x, y, z] in meters (in camera frame)
         camera_matrix: 3x3 camera intrinsic matrix K
         
     Returns:
@@ -340,33 +405,30 @@ def draw_prediction_overlay(
     """
     Draw prediction overlay on image with projected 3D point.
     
-    Projects the 3D offset to image plane and visualizes it.
+    The offset represents the 3D position of the grasp point in camera frame.
+    This function projects it directly to the image plane.
     
     Args:
         image: Input image (H, W, 3)
-        offset: Predicted 3D offset [x, y, z] in meters
-        origin: Optional origin pixel (default: image center)
+        offset: Predicted 3D grasp position [x, y, z] in meters (in camera frame)
+        origin: Optional origin pixel (currently unused, kept for API compatibility)
         
     Returns:
-        Image with overlay
+        Image with overlay showing the predicted grasp point
     """
     img_overlay = image.copy()
     h, w = image.shape[:2]
     
-    # Get origin
-    if origin is None:
-        origin = (w // 2, h // 2)
-    
     # Create camera matrix based on image size
-    # Standard camera parameters: fx=fy=2.8mm, cx=width/2, cy=height/2
+    # ZED camera: 2.8mm focal length, 1920x1080 resolution
     K = create_camera_matrix(w, h, focal_length_mm=2.8)
     
-    # Draw text with prediction values
+    # Draw text with prediction values (in camera frame)
     text_lines = [
-        f"Prediction (meters):",
-        f"  x: {offset[0]:7.4f}",
-        f"  y: {offset[1]:7.4f}",
-        f"  z: {offset[2]:7.4f}",
+        f"Grasp point (cam frame, m):",
+        f"  x: {offset[0]:7.4f} (right)",
+        f"  y: {offset[1]:7.4f} (down)",
+        f"  z: {offset[2]:7.4f} (forward)",
     ]
     
     y_offset_text = 30
@@ -381,49 +443,54 @@ def draw_prediction_overlay(
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
         )
     
-    # Project the 3D offset point to 2D image plane
-    # Assume the offset is relative to a point 1 meter in front of camera
-    origin_3d = np.array([0.0, 0.0, 1.0])  # 1 meter ahead
-    target_3d = origin_3d + offset
+    # Project the predicted grasp point directly to image plane
+    # The offset IS the 3D position of the grasp point in camera frame
+    grasp_point_3d = offset
     
-    # Project target point to image
+    # Project grasp point to image
     try:
-        target_2d = project_3d_to_2d(target_3d, K)
+        grasp_2d = project_3d_to_2d(grasp_point_3d, K)
         
         # Clamp to image bounds
-        target_2d_clamped = (
-            max(0, min(w - 1, target_2d[0])),
-            max(0, min(h - 1, target_2d[1]))
+        grasp_2d_clamped = (
+            max(0, min(w - 1, grasp_2d[0])),
+            max(0, min(h - 1, grasp_2d[1]))
         )
         
-        # Draw arrow from origin to projected target
-        cv2.arrowedLine(
-            img_overlay,
-            origin,
-            target_2d_clamped,
-            (0, 255, 255),  # Yellow
-            3,
-            tipLength=0.2
-        )
+        # Draw the predicted grasp point
+        cv2.circle(img_overlay, grasp_2d_clamped, 5, (0, 0, 0), -1)
         
-        # Draw origin point (current position)
-        cv2.circle(img_overlay, origin, 7, (0, 0, 255), -1)  # Red
+        # # Add crosshair for precision
+        # crosshair_size = 20
+        # cv2.line(
+        #     img_overlay,
+        #     (grasp_2d_clamped[0] - crosshair_size, grasp_2d_clamped[1]),
+        #     (grasp_2d_clamped[0] + crosshair_size, grasp_2d_clamped[1]),
+        #     (0, 255, 255), 2
+        # )
+        # cv2.line(
+        #     img_overlay,
+        #     (grasp_2d_clamped[0], grasp_2d_clamped[1] - crosshair_size),
+        #     (grasp_2d_clamped[0], grasp_2d_clamped[1] + crosshair_size),
+        #     (0, 255, 255), 2
+        # )
         
-        # Draw target point (predicted position)
-        cv2.circle(img_overlay, target_2d_clamped, 7, (0, 255, 0), -1)  # Green
-        
-        # Add label for target point
-        label = f"Target"
+        # Add label for grasp point
+        label = f"Predicted Grasp: ({grasp_2d_clamped[0]}, {grasp_2d_clamped[1]})"
         cv2.putText(
             img_overlay, label,
-            (target_2d_clamped[0] + 10, target_2d_clamped[1] - 10),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
+            (grasp_2d_clamped[0] + 15, grasp_2d_clamped[1] - 15),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
         )
         
     except Exception as e:
-        logger.warning(f"Failed to project point: {e}")
-        # Fallback: just draw origin
-        cv2.circle(img_overlay, origin, 7, (0, 0, 255), -1)
+        logger.warning(f"Failed to project grasp point: {e}")
+        # Draw error message
+        cv2.putText(
+            img_overlay, "Projection failed",
+            (w // 2 - 100, h // 2),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2
+        )
     
     return img_overlay
 
@@ -439,7 +506,7 @@ def create_side_by_side_visualization(
     Args:
         left_img: Left RGB image
         right_img: Right RGB image
-        offset: Predicted 3D offset [x, y, z] in meters
+        offset: Predicted 3D offset [x, y, z] in meters (in camera frame)
         
     Returns:
         Side-by-side visualization image
